@@ -107,22 +107,48 @@ function App() {
     );
   }, [countryDetails]);
 
+  const visitedCountriesCount = Object.values(countryStatuses).filter(
+    (status) => status === "visited"
+  ).length;
+
+  const plannedCountriesCount = Object.values(countryStatuses).filter(
+    (status) => status === "planned"
+  ).length;
+
+  const placesExploredCount = Object.entries(countryDetails)
+    .filter(([countryCode]) => countryStatuses[countryCode] === "visited")
+    .reduce(
+      (total, [, details]) => total + (details.attractions?.length ?? 0),
+      0
+    );
+  const citiesVisitedCount = Object.entries(countryDetails)
+  .filter(([countryCode]) => countryStatuses[countryCode] === "visited")
+  .reduce(
+    (total, [, details]) => total + (details.cities?.length ?? 0),
+    0
+  );  
+
   const stats = [
   {
     label: "Countries visited",
-    value: Object.values(countryStatuses).filter(
-      (status) => status === "visited"
-    ).length.toString(),
+    value: visitedCountriesCount.toString(),
     icon: "🌍",
   },
   {
     label: "Countries planned",
-    value: Object.values(countryStatuses).filter(
-      (status) => status === "planned"
-    ).length.toString(),
+    value: plannedCountriesCount.toString(),
     icon: "✈️",
   },
-  { label: "Places explored", value: "64", icon: "📍" },
+  {
+    label: "Cities visited",
+    value: citiesVisitedCount.toString(),
+    icon: "🏙️",
+  },
+  {
+    label: "Places explored",
+    value: placesExploredCount.toString(),
+    icon: "📍",
+  },
 ];
   const visitedCountries = Object.values(countryStatuses).filter(
     (status) => status === "visited"
