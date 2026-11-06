@@ -1,13 +1,41 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { brand } from "./config/brand";
 import "./App.css";
+import WorldMap from "./components/WorldMap";
+import Achievements from "./components/Achievements";
 
-const stats = [
-  { label: "Countries", value: "12", icon: "🌍" },
-  { label: "Cities", value: "38", icon: "🏙️" },
-  { label: "Places explored", value: "64", icon: "📍" },
-];
+
+type CountryStatus = "visited" | "planned" | "not-visited";
+
+type CountryStatuses = Record<string, CountryStatus>;
+type Attraction = {
+  id: string;
+  name: string;
+  category: string;
+  city: string;
+  visitDate: string;
+  rating: number;
+  notes: string;
+};
+
+type CountryDetails = {
+  firstVisitDate?: string;
+  notes?: string;
+  cities?: string[];
+  attractions?: Attraction[];
+};
+
+type CountryDetailsMap = Record<string, CountryDetails>;
+
+const initialCountryStatuses: CountryStatuses = {
+  "050": "visited",      // Bangladesh
+  "356": "visited",      // India
+  "554": "visited",      // New Zealand
+  "036": "planned",      // Australia
+  "826": "planned",      // United Kingdom
+  "840": "planned",      // United States
+};
 
 const achievements = [
   {
@@ -32,7 +60,120 @@ const achievements = [
 
 function App() {
   const [activePage, setActivePage] = useState("My Journey");
+  const [countryStatuses, setCountryStatuses] =
+  useState<CountryStatuses>(() => {
+    const savedStatuses = localStorage.getItem(
+      "globemarks-country-statuses"
+    );
 
+    if (savedStatuses) {
+      try {
+        return JSON.parse(savedStatuses) as CountryStatuses;
+      } catch {
+        return initialCountryStatuses;
+      }
+    }
+
+    return initialCountryStatuses;
+  });
+
+  const [countryDetails, setCountryDetails] =
+  useState<CountryDetailsMap>(() => {
+    const savedDetails = localStorage.getItem(
+      "globemarks-country-details"
+    );
+
+    if (savedDetails) {
+      try {
+        return JSON.parse(savedDetails) as CountryDetailsMap;
+      } catch {
+        return {};
+      }
+    }
+
+    return {};
+  });
+
+  useEffect(() => {
+    localStorage.setItem(
+      "globemarks-country-statuses",
+      JSON.stringify(countryStatuses)
+    );
+  }, [countryStatuses]);
+  useEffect(() => {
+    localStorage.setItem(
+      "globemarks-country-details",
+      JSON.stringify(countryDetails)
+    );
+  }, [countryDetails]);
+
+  const stats = [
+  {
+    label: "Countries visited",
+    value: Object.values(countryStatuses).filter(
+      (status) => status === "visited"
+    ).length.toString(),
+    icon: "🌍",
+  },
+  {
+    label: "Countries planned",
+    value: Object.values(countryStatuses).filter(
+      (status) => status === "planned"
+    ).length.toString(),
+    icon: "✈️",
+  },
+  { label: "Places explored", value: "64", icon: "📍" },
+];
+  const visitedCountries = Object.values(countryStatuses).filter(
+    (status) => status === "visited"
+  ).length;
+
+  const allAttractions = Object.values(countryDetails).flatMap(
+    (details) => details.attractions ?? []
+  );
+
+  const milestoneList = [
+    {
+      name: "First Explorer",
+      description: "Visit your first country.",
+      current: visitedCountries,
+      target: 1,
+      unit: "countries",
+      icon: "🌍",
+    },
+    {
+      name: "Globe Trotter",
+      description: "Visit 5 different countries.",
+      current: visitedCountries,
+      target: 5,
+      unit: "countries",
+      icon: "✈️",
+    },
+    {
+      name: "Nature Lover",
+      description: "Explore 10 natural attractions.",
+      current: allAttractions.filter(
+        (item) => item.category === "Natural Attraction"
+      ).length,
+      target: 10,
+      unit: "attractions",
+      icon: "🏞️",
+    },
+    {
+      name: "Heritage Hunter",
+      description: "Explore 5 UNESCO heritage sites.",
+      current: allAttractions.filter(
+        (item) => item.category === "UNESCO Heritage"
+      ).length,
+      target: 5,
+      unit: "heritage sites",
+      icon: "🏛️",
+    },
+  ];
+
+  const nextMilestone = milestoneList.find(
+    (item) => item.current < item.target
+  );
   const navigation = [
     "Explore",
     "My Journey",
@@ -107,73 +248,95 @@ function App() {
               <button className="text-button">View full map ↗</button>
             </div>
 
-            <div className="map-placeholder">
-              <div className="map-content">
-                <span className="map-globe">🌐</span>
-                <h3>Your world is waiting.</h3>
-                <p>
-                  Your visited destinations will appear here
-                  as you collect your travel memories.
-                </p>
-                <button className="secondary-button">
-                  Start exploring
-                </button>
-              </div>
-            </div>
-
-            <div className="map-legend">
-              <span><i className="legend-dot visited" /> Visited</span>
-              <span><i className="legend-dot planned" /> Want to explore</span>
-            </div>
+            <WorldMap
+              countryStatuses={countryStatuses}
+              onCountryStatusChange={(countryCode, status) => {
+                setCountryStatuses((previous) => ({
+                  ...previous,
+                  [countryCode]: status,
+                }));
+              }}
+              countryDetails={countryDetails}
+              onCountryDetailsChange={(countryCode, details) => {
+                setCountryDetails((previous) => ({
+                  ...previous,
+                  [countryCode]: {
+                    ...previous[countryCode],
+                    ...details,
+                  },
+                }));
+              }}
+            />
           </article>
 
           <article className="panel milestone-panel">
             <p className="eyebrow">KEEP EXPLORING</p>
             <h2>Your next milestone</h2>
 
-            <div className="milestone-icon">🏆</div>
-            <h3>Culture Collector</h3>
-            <p className="milestone-description">
-              Visit 5 cultural landmarks to unlock your next badge.
-            </p>
-
-            <div className="progress-heading">
-              <span>Progress</span>
-              <strong>3 / 5</strong>
-            </div>
-            <div className="progress-track">
-              <div className="progress-fill" />
-            </div>
-
-            <p className="progress-caption">
-              Just 2 more landmarks to go!
-            </p>
-          </article>
-        </section>
-
-        <section className="achievements-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">YOUR TRAVEL MILESTONES</p>
-              <h2>Recent achievements</h2>
-            </div>
-            <button className="text-button">See all →</button>
-          </div>
-
-          <div className="achievement-grid">
-            {achievements.map((achievement) => (
-              <article className="achievement-card" key={achievement.title}>
-                <div className="achievement-icon">
-                  {achievement.icon}
+            {nextMilestone ? (
+              <>
+                <div className="milestone-icon">
+                  {nextMilestone.icon}
                 </div>
-                <h3>{achievement.title}</h3>
-                <p>{achievement.description}</p>
-                <span className="achievement-progress">
-                  {achievement.progress}
-                </span>
-              </article>
-            ))}
-          </div>
+
+                <h3>{nextMilestone.name}</h3>
+
+                <p className="milestone-description">
+                  {nextMilestone.description}
+                </p>
+
+                <div className="progress-heading">
+                  <span>Progress</span>
+                  <strong>
+                    {Math.min(nextMilestone.current, nextMilestone.target)} /{" "}
+                    {nextMilestone.target}
+                  </strong>
+                </div>
+
+                <div className="progress-track">
+                  <div
+                    className="progress-fill"
+                    style={{
+                      width: `${
+                        Math.min(
+                          (nextMilestone.current / nextMilestone.target) * 100,
+                          100
+                        )
+                      }%`,
+                    }}
+                  />
+                </div>
+
+                <p className="progress-caption">
+                  {nextMilestone.target - nextMilestone.current} more{" "}
+                  {nextMilestone.unit === "countries"
+                    ? nextMilestone.target - nextMilestone.current === 1
+                      ? "country"
+                      : "countries"
+                    : nextMilestone.unit === "attractions"
+                      ? nextMilestone.target - nextMilestone.current === 1
+                        ? "attraction"
+                        : "attractions"
+                      : nextMilestone.target - nextMilestone.current === 1
+                        ? "heritage site"
+                        : "heritage sites"} to go!
+                </p>
+              </>
+            ) : (
+              <div className="all-milestones-complete">
+                <div className="milestone-icon">🏆</div>
+                <h3>All milestones completed!</h3>
+                <p>Congratulations! Keep exploring and creating memories.</p>
+              </div>
+            )}
+
+            <div className="milestone-achievements">
+              <Achievements
+                countryStatuses={countryStatuses}
+                countryDetails={countryDetails}
+              />
+            </div>
+          </article>
         </section>
 
         <footer className="footer">

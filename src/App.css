@@ -491,3 +491,223 @@
     gap: 4px;
   }
 }
+
+/* World map and achievements side-by-side layout */
+.map-achievements-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+}
+
+.map-column {
+  min-width: 0;
+}
+
+.achievements-column {
+  min-width: 0;
+}
+
+/* Responsive layout for smaller screens */
+@media (max-width: 900px) {
+  .map-achievements-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Compact achievements below the next milestone */
+.milestone-achievements {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid #e5ebe6;
+}
+
+.milestone-achievements .achievements-section {
+  margin: 0;
+  padding: 0;
+}
+
+.milestone-achievements .achievements-heading {
+  margin-bottom: 16px;
+}
+
+.milestone-achievements .achievements-heading h2 {
+  font-size: 19px;
+  margin: 0;
+}
+
+.milestone-achievements .achievements-heading p {
+  font-size: 12px;
+  margin-top: 5px;
+}
+
+.milestone-achievements .achievement-counter {
+  font-size: 11px;
+}
+
+.milestone-achievements .achievements-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.milestone-achievements .achievement-card {
+  min-width: 0;
+  min-height: 175px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border: 1px solid #e1e9e3;
+  border-radius: 14px;
+  background: #ffffff;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.milestone-achievements .achievement-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 18px rgba(30, 70, 45, 0.08);
+}
+
+.milestone-achievements .achievement-icon {
+  width: 46px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: #edf5ef;
+  font-size: 25px;
+  margin-bottom: 12px;
+}
+
+.milestone-achievements .achievement-card h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+
+.milestone-achievements .achievement-card p {
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0 0 12px;
+}
+
+.milestone-achievements .achievement-progress {
+  font-size: 11px;
+}
+
+.milestone-achievements .achievement-status {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #16865b;
+}
+
+.milestone-achievements .achievement-progress-track {
+  height: 5px;
+  margin-top: 8px;
+  border-radius: 10px;
+  background: #e8eee9;
+  overflow: hidden;
+}
+
+.milestone-achievements .achievement-progress-fill {
+  height: 100%;
+  border-radius: 10px;
+  background: #16865b;
+}
+
+
+/* Golden styling for unlocked achievements */
+.milestone-achievements .achievement-card.unlocked {
+  border: 1px solid #e7c778;
+  background: linear-gradient(145deg, #fffaf0, #ffffff);
+  box-shadow: 0 3px 12px rgba(190, 145, 45, 0.08);
+}
+
+.milestone-achievements .achievement-card.unlocked .achievement-icon {
+  background: #fff0c5;
+  box-shadow: 0 0 0 3px rgba(231, 199, 120, 0.18);
+}
+
+.milestone-achievements .achievement-card.unlocked .achievement-status {
+  color: #a47716;
+}
+
+.milestone-achievements .achievement-card.locked {
+  background: #f8faf9;
+}
+
+/* Achievement celebration notification */
+.achievement-celebration {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 18px;
+  border: 1px solid #e7c778;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff3cd, #fffaf0);
+  box-shadow: 0 6px 20px rgba(190, 145, 45, 0.12);
+  animation: celebration-appear 0.5s ease-out;
+}
+
+.celebration-icon {
+  font-size: 32px;
+  animation: trophy-bounce 0.8s ease-out;
+}
+
+.celebration-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.celebration-content h3 {
+  margin: 0 0 5px;
+  font-size: 14px;
+  color: #8a6417;
+}
+
+.celebration-content p {
+  margin: 0;
+  font-size: 12px;
+  color: #66532c;
+  line-height: 1.5;
+}
+
+.celebration-close {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: #8a6417;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+/* Celebration animations */
+@keyframes celebration-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes trophy-bounce {
+  0% { transform: scale(0.5) rotate(-15deg); }
+  50% { transform: scale(1.2) rotate(10deg); }
+  75% { transform: scale(0.95) rotate(-5deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .achievement-celebration,
+  .celebration-icon {
+    animation: none;
+  }
+}
