@@ -4,6 +4,7 @@ import { brand } from "./config/brand";
 import "./App.css";
 import WorldMap from "./components/WorldMap";
 import Achievements from "./components/Achievements";
+import TravelHistory from "./components/TravelHistory";
 
 
 type CountryStatus = "visited" | "planned" | "not-visited";
@@ -203,6 +204,7 @@ function App() {
   const navigation = [
     "Explore",
     "My Journey",
+    "Travel History",
     "Achievements",
     "Community",
   ];
@@ -238,7 +240,14 @@ function App() {
       </header>
 
       <main className="main-content">
-        <section className="welcome-section">
+      {activePage === "Travel History" ? (
+        <TravelHistory
+          countryStatuses={countryStatuses}
+          countryDetails={countryDetails}
+        />
+      ) : (
+        <>
+          <section className="welcome-section">
           <div>
             <p className="eyebrow">YOUR PERSONAL TRAVEL JOURNAL</p>
             <h1>Your world, your story.</h1>
@@ -364,6 +373,8 @@ function App() {
             </div>
           </article>
         </section>
+          </>
+        )}
 
         <footer className="footer">
           <p>© {new Date().getFullYear()} {brand.name}. {brand.tagline}</p>
