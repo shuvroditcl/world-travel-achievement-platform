@@ -5,6 +5,9 @@ import "./App.css";
 import WorldMap from "./components/WorldMap";
 import Achievements from "./components/Achievements";
 import TravelHistory from "./components/TravelHistory";
+import AddDestination from "./components/AddDestination";
+import PlacesExplored from "./components/PlacesExplored";
+import TravelStatsDetails from "./components/TravelStatsDetails";
 
 
 type CountryStatus = "visited" | "planned" | "not-visited";
@@ -240,11 +243,101 @@ function App() {
       </header>
 
       <main className="main-content">
-      {activePage === "Travel History" ? (
+      {activePage === "Places Explored" ? (
+        <PlacesExplored
+          countryStatuses={countryStatuses}
+          countryDetails={countryDetails}
+          onBack={() => setActivePage("My Journey")}
+        />
+      ) : activePage === "Countries visited" ||
+          activePage === "Countries planned" ||
+          activePage === "Cities visited" ? (
+        <TravelStatsDetails
+          page={activePage}
+          countryStatuses={countryStatuses}
+          countryDetails={countryDetails}
+          onBack={() => setActivePage("My Journey")}
+        />
+      ) : activePage === "Travel History" ? (
         <TravelHistory
           countryStatuses={countryStatuses}
           countryDetails={countryDetails}
         />
+      ) : activePage === "Add Destination" ? (
+        
+      <AddDestination
+        onBack={() => setActivePage("My Journey")}
+        onSave={(
+          countryCode,
+          status,
+          firstVisitDate,
+          city,
+          attraction
+        ) => {
+          setCountryStatuses((previous) => ({
+            ...previous,
+            [countryCode]: status,
+          }));
+
+          if (status === "visited") {
+            setCountryDetails((previous) => {
+              const existingDetails = previous[countryCode] ?? {};
+              const existingCities = existingDetails.cities ?? [];
+              const existingAttractions = existingDetails.attractions ?? [];
+
+              const newCity = city.trim();
+
+              const cityAlreadyExists = existingCities.some(
+                (existingCity) =>
+                  existingCity.toLowerCase() === newCity.toLowerCase()
+              );
+
+              const updatedCities =
+                newCity && !cityAlreadyExists
+                  ? [...existingCities, newCity]
+                  : existingCities;
+
+              const attractionAlreadyExists = attraction
+              ? existingAttractions.some(
+                  (existing) =>
+                    existing.name.trim().toLowerCase() ===
+                      attraction.name.trim().toLowerCase() &&
+                    existing.city.trim().toLowerCase() ===
+                      newCity.toLowerCase()
+                )
+              : false;    
+              const newAttraction =
+              attraction && !attractionAlreadyExists
+                ? {
+                    id: crypto.randomUUID(),
+                    name: attraction.name,
+                    category: attraction.category,
+                    city: newCity,
+                    visitDate: attraction.visitDate || firstVisitDate,
+                    rating: attraction.rating,
+                    notes: attraction.notes,
+                  }
+                : null;
+
+              return {
+                ...previous,
+                [countryCode]: {
+                  ...existingDetails,
+                  firstVisitDate:
+                    firstVisitDate || existingDetails.firstVisitDate,
+                  cities: updatedCities,
+                  attractions: newAttraction
+                    ? [...existingAttractions, newAttraction]
+                    : existingAttractions,
+                },
+              };
+            });
+          }
+
+          setActivePage("My Journey");
+        }}
+      />
+
       ) : (
         <>
           <section className="welcome-section">
@@ -256,14 +349,29 @@ function App() {
             </p>
           </div>
 
-          <button className="primary-button">
+          <button
+            className="primary-button"
+            onClick={() => setActivePage("Add Destination")}
+          >
             + Add a destination
           </button>
         </section>
 
         <section className="stats-grid" aria-label="Travel statistics">
           {stats.map((stat) => (
-            <article className="stat-card" key={stat.label}>
+            <article
+              className="stat-card"
+              key={stat.label}
+              role="button"
+              tabIndex={0}
+              onClick={() => setActivePage(stat.label)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setActivePage(stat.label);
+                }
+              }}
+            >
               <div className="stat-icon">{stat.icon}</div>
               <div>
                 <p className="stat-value">{stat.value}</p>
