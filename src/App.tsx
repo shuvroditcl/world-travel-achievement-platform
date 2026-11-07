@@ -1,5 +1,12 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "./lib/supabase";
+import {
+  loadTravelData,
+  saveTravelData,
+  migrateLocalTravelData,
+} from "./lib/travelData";
 import { brand } from "./config/brand";
 import "./App.css";
 import WorldMap from "./components/WorldMap";
@@ -8,6 +15,7 @@ import TravelHistory from "./components/TravelHistory";
 import AddDestination from "./components/AddDestination";
 import PlacesExplored from "./components/PlacesExplored";
 import TravelStatsDetails from "./components/TravelStatsDetails";
+import Auth from "./components/Auth";
 
 
 type CountryStatus = "visited" | "planned" | "not-visited";
@@ -41,28 +49,260 @@ const initialCountryStatuses: CountryStatuses = {
   "840": "planned",      // United States
 };
 
-const achievements = [
-  {
-    title: "Nature Explorer",
-    description: "Discover the beauty of nature",
-    progress: "8 / 10 destinations",
-    icon: "🏔️",
-  },
-  {
-    title: "City Discoverer",
-    description: "Explore remarkable cities",
-    progress: "6 / 10 cities",
-    icon: "🏙️",
-  },
-  {
-    title: "Culture Collector",
-    description: "Experience cultures around the world",
-    progress: "3 / 5 landmarks",
-    icon: "🏛️",
-  },
-];
+
+function normalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeJson);
+  }
+
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([keyA], [keyB]) => (
+          keyA < keyB ? -1 : keyA > keyB ? 1 : 0
+        ))
+        .map(([key, item]) => [key, normalizeJson(item)])
+    );
+  }
+
+  return value;
+}
+
+function jsonDataMatches(a: unknown, b: unknown): boolean {
+  return JSON.stringify(normalizeJson(a)) ===
+    JSON.stringify(normalizeJson(b));
+}
+
 
 function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const currentUserIdRef = useRef<string | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  currentUserIdRef.current = session?.user.id ?? null;
+  const [travelDataLoading, setTravelDataLoading] = useState(true);
+  const [travelDataError, setTravelDataError] = useState("");
+  const [loadedTravelUserId, setLoadedTravelUserId] =
+    useState<string | null>(null);
+  const handleLogout = async () => {
+  const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      console.error("Logout failed:", error);
+      alert("Unable to log out. Please try again.");
+      return;
+    }
+
+    setSession(null);
+    setActivePage("My Journey");
+  };
+  
+  const [migrationLoading, setMigrationLoading] = useState(false);
+  const [migrationMessage, setMigrationMessage] = useState("");
+
+  const handleMigrateTravelData = async () => {
+    if (!session?.user.id || migrationLoading) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Migrate existing browser travel data to ${session.user.email}?\n\n` +
+      "This will not delete your local data or backup file."
+    );
+
+    if (!confirmed) return;
+
+    setMigrationLoading(true);
+    setMigrationMessage("");
+
+    try {
+      const statusesRaw = localStorage.getItem(
+        "globemarks-country-statuses"
+      );
+
+      const detailsRaw = localStorage.getItem(
+        "globemarks-country-details"
+      );
+
+      if (!statusesRaw || !detailsRaw) {
+        throw new Error(
+          "Local travel data is missing. Migration cancelled."
+        );
+      }
+
+      const localData = {
+        countryStatuses: JSON.parse(statusesRaw),
+        countryDetails: JSON.parse(detailsRaw),
+      };
+
+      const result = await migrateLocalTravelData(
+        session.user.id,
+        localData
+      );
+
+      if (result === "already_exists") {
+        setMigrationMessage(
+          "Cloud data already exists. Nothing was overwritten."
+        );
+        return;
+      }
+
+      const savedData = await loadTravelData(session.user.id);
+      
+      if (
+        !savedData ||
+        !jsonDataMatches(
+          savedData.countryStatuses,
+          localData.countryStatuses
+        ) ||
+        !jsonDataMatches(
+          savedData.countryDetails,
+          localData.countryDetails
+        )
+      ) {
+        throw new Error(
+          "Cloud verification did not match local data. Keep your backup."
+        );
+      }
+
+
+      setMigrationMessage(
+        "Migration successful! Travel data verified in Supabase."
+      );
+    } catch (error) {
+      console.error("GlobeMarks migration error:", error);
+
+      setMigrationMessage(
+        error instanceof Error ? error.message : "Migration failed."
+      );
+    } finally {
+      setMigrationLoading(false);
+    }
+  };
+  
+  const handleVerifyCloudData = async () => {
+    if (!session?.user.id || migrationLoading) {
+      return;
+    }
+
+    setMigrationLoading(true);
+    setMigrationMessage("");
+
+    try {
+      const statusesRaw = localStorage.getItem(
+        "globemarks-country-statuses"
+      );
+
+      const detailsRaw = localStorage.getItem(
+        "globemarks-country-details"
+      );
+
+      if (!statusesRaw || !detailsRaw) {
+        throw new Error("Local travel data is missing.");
+      }
+
+      const localData = {
+        countryStatuses: JSON.parse(statusesRaw),
+        countryDetails: JSON.parse(detailsRaw),
+      };
+
+      const cloudData = await loadTravelData(session.user.id);
+
+      if (!cloudData) {
+        setMigrationMessage(
+          "No cloud travel data found for this account."
+        );
+        return;
+      }
+
+      const statusesMatch = jsonDataMatches(
+        cloudData.countryStatuses,
+        localData.countryStatuses
+      );
+
+      const detailsMatch = jsonDataMatches(
+        cloudData.countryDetails,
+        localData.countryDetails
+      );
+
+      if (statusesMatch && detailsMatch) {
+        setMigrationMessage(
+          "Verified! Cloud and local travel data match."
+        );
+      } else {
+        setMigrationMessage(
+          "Cloud and local data differ. No changes were made."
+        );
+
+        console.log("Country statuses match:", statusesMatch);
+        console.log("Country details match:", detailsMatch);
+      }
+    } catch (error) {
+      console.error("Cloud verification failed:", error);
+
+      setMigrationMessage(
+        error instanceof Error
+          ? error.message
+          : "Cloud verification failed."
+      );
+    } finally {
+      setMigrationLoading(false);
+    }
+  };
+  
+  
+  const saveTravelChanges = async (
+    updatedStatuses: CountryStatuses,
+    updatedDetails: CountryDetailsMap
+  ): Promise<void> => {
+    const userId = session?.user.id;
+
+    if (
+      !userId ||
+      authLoading ||
+      travelDataLoading ||
+      loadedTravelUserId !== userId
+    ) {
+      throw new Error("Travel data is not ready for saving.");
+    }
+
+    const performSave = async () => {
+      if (currentUserIdRef.current !== userId) {
+        throw new Error("Account changed. Save cancelled.");
+      }
+
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (error || user?.id !== userId) {
+        throw new Error("Authentication changed. Save cancelled.");
+      }
+
+      if (currentUserIdRef.current !== userId) {
+        throw new Error("Account changed. Save cancelled.");
+      }
+
+      await saveTravelData(userId, {
+        countryStatuses: updatedStatuses,
+        countryDetails: updatedDetails,
+      });
+    };
+
+    const queuedSave = saveQueueRef.current.then(performSave);
+
+    saveQueueRef.current = queuedSave.catch(() => {
+      // Keep the queue usable after a failed save.
+    });
+
+    return queuedSave;
+    void saveTravelChanges;
+  };
+
+
+
+
   const [activePage, setActivePage] = useState("My Journey");
   const [countryStatuses, setCountryStatuses] =
   useState<CountryStatuses>(() => {
@@ -97,19 +337,6 @@ function App() {
 
     return {};
   });
-
-  useEffect(() => {
-    localStorage.setItem(
-      "globemarks-country-statuses",
-      JSON.stringify(countryStatuses)
-    );
-  }, [countryStatuses]);
-  useEffect(() => {
-    localStorage.setItem(
-      "globemarks-country-details",
-      JSON.stringify(countryDetails)
-    );
-  }, [countryDetails]);
 
   const visitedCountriesCount = Object.values(countryStatuses).filter(
     (status) => status === "visited"
@@ -154,6 +381,79 @@ function App() {
     icon: "📍",
   },
 ];
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+  
+  useEffect(() => {
+    const userId = session?.user.id;
+
+    if (authLoading) {
+      return;
+    }
+
+    // Never display the previous user's travel records.
+    setLoadedTravelUserId(null);
+    setTravelDataLoading(true);
+    setTravelDataError("");
+
+    if (!userId) {
+      setCountryStatuses({});
+      setCountryDetails({});
+      setTravelDataLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchTravelData = async () => {
+      try {
+        const cloudData = await loadTravelData(userId);
+
+        if (cancelled) return;
+
+        if (cloudData) {
+          setCountryStatuses(cloudData.countryStatuses);
+          setCountryDetails(cloudData.countryDetails);
+        } else {
+          // New account: no cloud records yet.
+          setCountryStatuses({});
+          setCountryDetails({});
+        }
+
+        setLoadedTravelUserId(userId);
+        setTravelDataLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error("Failed to load travel data:", error);
+
+        setTravelDataError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load travel data."
+        );
+
+        setTravelDataLoading(false);
+      }
+    };
+
+    void fetchTravelData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user.id, authLoading]);
+
   const visitedCountries = Object.values(countryStatuses).filter(
     (status) => status === "visited"
   ).length;
@@ -210,6 +510,7 @@ function App() {
     "Travel History",
     "Achievements",
     "Community",
+    ...(session ? ["Logout"] : ["Login / Sign Up"]),
   ];
 
   return (
@@ -221,29 +522,126 @@ function App() {
         </a>
 
         <nav className="nav-links">
-          {navigation.map((item) => (
-            <button
-              key={item}
-              className={activePage === item ? "nav-link active" : "nav-link"}
-              onClick={() => setActivePage(item)}
-            >
-              {item}
-            </button>
-          ))}
+          {navigation.map((item) => {
+            const isAuthButton = item === "Login / Sign Up";
+
+            const isActive = isAuthButton
+              ? activePage === "Auth"
+              : activePage === item;
+
+            return (
+              <button
+                key={item}
+                className={isActive ? "nav-link active" : "nav-link"}
+                onClick={() => {
+                  if (item === "Logout") {
+                    void handleLogout();
+                  } else if (isAuthButton) {
+                    setActivePage("Auth");
+                  } else {
+                    setActivePage(item);
+                  }
+                }}
+              >
+                {item}
+              </button>
+            );
+          })}
         </nav>
 
         <div className="nav-actions">
           <button className="icon-button" aria-label="Search">
             ⌕
           </button>
-          <button className="profile-avatar" aria-label="User profile">
-            SD
+          <button
+            className="profile-avatar"
+            aria-label={session ? "Signed-in user" : "Sign in"}
+            title={session?.user.email ?? "Sign in"}
+            onClick={() => {
+              if (!session) {
+                setActivePage("Auth");
+              }
+            }}
+          >
+            {session?.user.email
+              ? session.user.email
+                  .split("@")[0]
+                  .split(/[._-]/)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((part) => part[0].toUpperCase())
+                  .join("")
+              : "?"}
           </button>
         </div>
       </header>
 
       <main className="main-content">
-      {activePage === "Places Explored" ? (
+        {authLoading || travelDataLoading ? (
+          <p>Loading your travel data...</p>
+        ) : travelDataError ? (
+          <p role="alert">
+            Unable to load travel data: {travelDataError}
+          </p>
+        ) : loadedTravelUserId !== session?.user.id && session ? (
+          <p>Waiting for your travel data...</p>
+        ) : (
+          <>
+        <div
+          style={{
+            padding: "12px 20px",
+            marginBottom: "16px",
+            background: "#eef6ff",
+            borderRadius: "10px",
+            fontSize: "14px",
+          }}
+        >
+          {authLoading
+            ? "Checking authentication..."
+            : session
+              ? `Signed in as: ${session.user.email ?? "Unknown user"}`
+              : "Not signed in"}
+          
+          {session && (
+            <div style={{ marginBottom: "20px" }}>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleMigrateTravelData()}
+                disabled={migrationLoading}
+              >
+                {migrationLoading
+                  ? "Migrating travel data..."
+                  : "Migrate My Travel Data to Supabase"}
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => void handleVerifyCloudData()}
+                disabled={migrationLoading}
+                style={{
+                  marginLeft: "12px",
+                  padding: "12px 18px",
+                  borderRadius: "8px",
+                  cursor: migrationLoading ? "wait" : "pointer",
+                }}
+              >
+                Verify Cloud Data
+              </button>
+
+
+              {migrationMessage && (
+                <p role="status" style={{ marginTop: "10px" }}>
+                  {migrationMessage}
+                </p>
+              )}
+            </div>
+          )}
+    
+        </div>
+      {activePage === "Auth" ? (
+        <Auth />
+      ) : activePage === "Places Explored" ? (
         <PlacesExplored
           countryStatuses={countryStatuses}
           countryDetails={countryDetails}
@@ -488,6 +886,8 @@ function App() {
           <p>© {new Date().getFullYear()} {brand.name}. {brand.tagline}</p>
           <p>Made for explorers everywhere 🌍</p>
         </footer>
+          </>
+        )}
       </main>
     </div>
   );
