@@ -21,7 +21,7 @@ type AddDestinationProps = {
     firstVisitDate: string,
     city: string,
     attraction: AttractionInput | null
-  ) => void;
+  ) => Promise<void>;
 };
 
 function AddDestination({ onBack, onSave }: AddDestinationProps) {
@@ -34,6 +34,8 @@ function AddDestination({ onBack, onSave }: AddDestinationProps) {
   const [attractionRating, setAttractionRating] = useState(5);
   const [attractionNotes, setAttractionNotes] = useState("");
   const [attractionVisitDate, setAttractionVisitDate] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const countryOptions = Object.entries(
     countries.getNames("en", { select: "official" })
@@ -59,29 +61,46 @@ function AddDestination({ onBack, onSave }: AddDestinationProps) {
 
       <form
         className="add-destination-form"
-        onSubmit={(event) => {
-            event.preventDefault();
+        
+        onSubmit={async (event) => {
+          event.preventDefault();
 
-            if (!countryCode) {
+          if (!countryCode || isSaving) {
             return;
-            }
+          }
 
-            onSave(
-            countryCode,
-            status,
-            firstVisitDate,
-            city.trim(),
-            status === "visited" && attractionName.trim()
+          setIsSaving(true);
+          setSaveError("");
+
+          try {
+            await onSave(
+              countryCode,
+              status,
+              firstVisitDate,
+              city.trim(),
+              status === "visited" && attractionName.trim()
                 ? {
-                  name: attractionName.trim(),
-                  category: attractionCategory,
-                  visitDate: attractionVisitDate,
-                  rating: attractionRating,
-                  notes: attractionNotes.trim(),
-                }
+                    name: attractionName.trim(),
+                    category: attractionCategory,
+                    visitDate: attractionVisitDate,
+                    rating: attractionRating,
+                    notes: attractionNotes.trim(),
+                  }
                 : null
             );
+          } catch (error) {
+            console.error("Failed to save destination:", error);
+
+            setSaveError(
+              error instanceof Error
+                ? error.message
+                : "Unable to save destination. Please try again."
+            );
+          } finally {
+            setIsSaving(false);
+          }
         }}
+
         >
         <label htmlFor="destination-country">Country</label>
         <select
@@ -235,19 +254,38 @@ function AddDestination({ onBack, onSave }: AddDestinationProps) {
             />
         </div>
         )}
+        
         <div className="add-destination-actions">
           <button
             type="button"
             className="text-button"
             onClick={onBack}
+            disabled={isSaving}
           >
             ← Cancel
           </button>
 
-          <button type="submit" className="primary-button">
-            Save Destination
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={isSaving}
+          >
+            {isSaving ? "Saving..." : "Save Destination"}
           </button>
         </div>
+
+        {saveError && (
+          <p
+            role="alert"
+            style={{
+              color: "#b42318",
+              marginTop: "12px",
+            }}
+          >
+            {saveError}
+          </p>
+        )}
+
       </form>
     </section>
   );

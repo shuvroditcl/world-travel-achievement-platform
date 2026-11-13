@@ -469,3 +469,9 @@
   font-size: 23px;
   cursor: pointer;
 }
+/* Disabled country status buttons */
+.status-option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(35%);
+}

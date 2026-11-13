@@ -79,7 +79,18 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const currentUserIdRef = useRef<string | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  currentUserIdRef.current = session?.user.id ?? null;
+  const saveInProgressRef = useRef(false);
+  const pendingTravelDataRef = useRef<{
+    countryStatuses: CountryStatuses;
+    countryDetails: CountryDetailsMap;
+  } | null>(null);
+  const travelDataRevisionRef = useRef(0);
+  const [travelSaveError, setTravelSaveError] = useState("");
+  const travelSaveFailedRef = useRef(false);
+  const [travelRecoveryLoading, setTravelRecoveryLoading] =
+  useState(false);
+  const travelRecoveryInProgressRef = useRef(false);
+  const travelRecoveryIdRef = useRef(0);
   const [travelDataLoading, setTravelDataLoading] = useState(true);
   const [travelDataError, setTravelDataError] = useState("");
   const [loadedTravelUserId, setLoadedTravelUserId] =
@@ -254,9 +265,23 @@ function App() {
   const saveTravelChanges = async (
     updatedStatuses: CountryStatuses,
     updatedDetails: CountryDetailsMap
-  ): Promise<void> => {
-    const userId = session?.user.id;
-
+    ): Promise<void> => {
+      const userId = session?.user.id;
+      if (travelRecoveryInProgressRef.current) {
+    throw new Error(
+      "Travel data recovery is in progress. Please wait."
+    );
+  }
+  if (travelSaveFailedRef.current) {
+    throw new Error(
+      "A previous travel-data save failed. Please use 'Reload saved travel data' before making more changes."
+    );
+  }
+  if (saveInProgressRef.current) {
+  throw new Error(
+    "Another travel-data save is in progress. Please wait until it finishes."
+  );
+}
     if (
       !userId ||
       authLoading ||
@@ -265,9 +290,22 @@ function App() {
     ) {
       throw new Error("Travel data is not ready for saving.");
     }
-
+    const accountRevision = travelDataRevisionRef.current;
     const performSave = async () => {
-      if (currentUserIdRef.current !== userId) {
+      if (travelRecoveryInProgressRef.current) {
+        throw new Error(
+          "Travel data recovery is in progress. Save cancelled."
+        );
+      }
+      if (travelSaveFailedRef.current) {
+        throw new Error(
+          "A previous travel-data save failed. Reload confirmed data before saving again."
+        );
+      }  
+      if (
+        currentUserIdRef.current !== userId ||
+        travelDataRevisionRef.current !== accountRevision
+      ) {
         throw new Error("Account changed. Save cancelled.");
       }
 
@@ -280,29 +318,246 @@ function App() {
         throw new Error("Authentication changed. Save cancelled.");
       }
 
-      if (currentUserIdRef.current !== userId) {
+      if (
+        currentUserIdRef.current !== userId ||
+        travelDataRevisionRef.current !== accountRevision
+      ) {
         throw new Error("Account changed. Save cancelled.");
       }
 
-      await saveTravelData(userId, {
-        countryStatuses: updatedStatuses,
-        countryDetails: updatedDetails,
-      });
+      try {
+        await saveTravelData(userId, {
+          countryStatuses: updatedStatuses,
+          countryDetails: updatedDetails,
+        });
+        // Check whether the account changed while Supabase was saving.
+        if (
+          currentUserIdRef.current !== userId ||
+          travelDataRevisionRef.current !== accountRevision
+        ) {
+          throw new Error(
+            "Account changed while saving. Reload travel data."
+          );
+        }
+      } catch (error) {
+        if (
+          currentUserIdRef.current === userId &&
+          travelDataRevisionRef.current === accountRevision
+        ) {
+          travelSaveFailedRef.current = true;
+
+          setTravelSaveError(
+            error instanceof Error
+              ? error.message
+              : "Unable to save travel data."
+          );
+        }
+
+        throw error;
+      }
     };
 
-    const queuedSave = saveQueueRef.current.then(performSave);
+    // Mark the save as pending immediately.
+    saveInProgressRef.current = true;
 
-    saveQueueRef.current = queuedSave.catch(() => {
-      // Keep the queue usable after a failed save.
+    const queuedSave = saveQueueRef.current.then(async () => {
+      try {
+        await performSave();
+      } finally {
+        // Only clear the flag for the same account session.
+        if (
+          currentUserIdRef.current === userId &&
+          travelDataRevisionRef.current === accountRevision
+        ) {
+          saveInProgressRef.current = false;
+        }
+      }
+    });
+
+    saveQueueRef.current = queuedSave.catch((error) => {
+      // Only block further saves for the same account session.
+      if (
+        currentUserIdRef.current === userId &&
+        travelDataRevisionRef.current === accountRevision
+      ) {
+        travelSaveFailedRef.current = true;
+
+        setTravelSaveError(
+          error instanceof Error
+            ? error.message
+            : "Unable to save travel data."
+        );
+      }
+
+      // Keep the promise chain usable so future operations
+      // can proceed after an explicit recovery.
     });
 
     return queuedSave;
-    void saveTravelChanges;
   };
+  const updateCountryDetails = async (
+    countryCode: string,
+    details: CountryDetails
+  ): Promise<void> => {
+    const userId = session?.user.id;
 
+    if (
+      !userId ||
+      authLoading ||
+      travelDataLoading ||
+      loadedTravelUserId !== userId ||
+      travelDataError ||
+      travelSaveFailedRef.current
+    ) {
+      throw new Error(
+        travelSaveError ||
+        "Travel data is not ready for saving."
+      );
+    }
 
+    if (travelRecoveryInProgressRef.current) {
+    throw new Error(
+      "Travel data recovery is in progress. Please wait."
+    );
+  }
 
+  if (saveInProgressRef.current) {
+    throw new Error(
+      "Another travel-data save is in progress. Please wait."
+    );
+  }
+    const currentData = pendingTravelDataRef.current;
 
+    if (!currentData) {
+      throw new Error("Travel data has not been loaded.");
+    }
+
+    const updatedDetails: CountryDetailsMap = {
+      ...currentData.countryDetails,
+      [countryCode]: {
+        ...currentData.countryDetails[countryCode],
+        ...details,
+      },
+    };
+    // Reserve the latest changes before the asynchronous save.
+    const pendingSnapshot = {
+      countryStatuses: currentData.countryStatuses,
+      countryDetails: updatedDetails,
+    };
+
+    pendingTravelDataRef.current = pendingSnapshot;
+    const accountRevision = travelDataRevisionRef.current;
+    try {
+      await saveTravelChanges(
+        currentData.countryStatuses,
+        updatedDetails
+      );
+    } catch (error) {
+      if (
+        currentUserIdRef.current === userId &&
+        travelDataRevisionRef.current === accountRevision &&
+        pendingTravelDataRef.current === pendingSnapshot
+      ) {
+        pendingTravelDataRef.current = currentData;
+      }
+
+      console.error("Failed to save country details:", error);
+      throw error;
+    }
+
+    if (
+      currentUserIdRef.current !== userId ||
+      travelDataRevisionRef.current !== accountRevision
+    ) {
+      throw new Error("Account changed during saving.");
+    }
+
+    // Operation 3: Clear the error after a successful save.
+    setTravelSaveError("");
+
+    if (pendingTravelDataRef.current?.countryDetails === updatedDetails) {
+      setCountryDetails(updatedDetails);
+    }
+  };
+  // Country-detail cloud saving will be connected after
+  // the WorldMap editing behavior is reviewed.
+  const recoverTravelData = async (): Promise<void> => {
+    const userId = session?.user.id;
+
+    if (!userId || currentUserIdRef.current !== userId) {
+      throw new Error("Please sign in before recovering travel data.");
+    }
+
+    const accountRevision = travelDataRevisionRef.current;
+
+if (travelRecoveryInProgressRef.current) {
+  throw new Error("Travel data recovery is already running.");
+}
+
+const recoveryId = ++travelRecoveryIdRef.current;
+
+travelRecoveryInProgressRef.current = true;
+setTravelRecoveryLoading(true);
+
+    try {
+      // Wait for previously queued writes to finish or be cancelled.
+      await saveQueueRef.current;
+
+      if (
+        currentUserIdRef.current !== userId ||
+        travelDataRevisionRef.current !== accountRevision
+      ) {
+        throw new Error("Account changed during recovery.");
+      }
+
+      const cloudData = await loadTravelData(userId);
+
+      if (
+        currentUserIdRef.current !== userId ||
+        travelDataRevisionRef.current !== accountRevision ||
+        travelRecoveryIdRef.current !== recoveryId
+      ) {
+        throw new Error(
+          "Recovery was cancelled because the account or recovery session changed."
+        );
+      }
+
+      if (!cloudData) {
+      throw new Error(
+        "No saved travel data was found in Supabase. Recovery stopped without changing your current data."
+      );
+    }
+
+    const confirmedStatuses = cloudData.countryStatuses;
+    const confirmedDetails = cloudData.countryDetails;
+
+      pendingTravelDataRef.current = {
+        countryStatuses: confirmedStatuses,
+        countryDetails: confirmedDetails,
+      };
+
+      setCountryStatuses(confirmedStatuses);
+      setCountryDetails(confirmedDetails);
+
+      travelSaveFailedRef.current = false;
+      setTravelSaveError("");
+    } catch (error) {
+      console.error("Travel data recovery failed:", error);
+      throw error;
+    } finally {
+      if (travelRecoveryIdRef.current === recoveryId) {
+        travelRecoveryInProgressRef.current = false;
+
+        if (
+          currentUserIdRef.current === userId &&
+          travelDataRevisionRef.current === accountRevision
+        ) {
+          setTravelRecoveryLoading(false);
+        }
+      }
+    }
+  };
+  
   const [activePage, setActivePage] = useState("My Journey");
   const [countryStatuses, setCountryStatuses] =
   useState<CountryStatuses>(() => {
@@ -385,9 +640,33 @@ function App() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      setAuthLoading(false);
-    });
+    const newUserId = newSession?.user.id ?? null;
+
+    if (currentUserIdRef.current !== newUserId) {
+      currentUserIdRef.current = newUserId;
+      pendingTravelDataRef.current = null;
+      travelDataRevisionRef.current += 1;
+
+      // Start a fresh save queue for the new account.
+      saveQueueRef.current = Promise.resolve();
+
+      // Reset save tracking for the new account.
+      saveInProgressRef.current = false;
+
+      // Reset save and recovery tracking for the new account.
+      travelSaveFailedRef.current = false;
+      travelRecoveryInProgressRef.current = false;
+      travelRecoveryIdRef.current += 1;
+
+      // Clear messages and loading state from the previous account.
+      setTravelSaveError("");
+      setTravelRecoveryLoading(false);
+      
+    }
+
+    setSession(newSession);
+    setAuthLoading(false);
+  });
 
     return () => {
       subscription.unsubscribe();
@@ -419,16 +698,29 @@ function App() {
       try {
         const cloudData = await loadTravelData(userId);
 
-        if (cancelled) return;
-
+        if (cancelled || currentUserIdRef.current !== userId) {
+          return;
+        }
+        
         if (cloudData) {
+          pendingTravelDataRef.current = {
+            countryStatuses: cloudData.countryStatuses,
+            countryDetails: cloudData.countryDetails,
+          };
+
           setCountryStatuses(cloudData.countryStatuses);
           setCountryDetails(cloudData.countryDetails);
         } else {
           // New account: no cloud records yet.
+          pendingTravelDataRef.current = {
+            countryStatuses: {},
+            countryDetails: {},
+          };
+
           setCountryStatuses({});
           setCountryDetails({});
         }
+
 
         setLoadedTravelUserId(userId);
         setTravelDataLoading(false);
@@ -515,6 +807,52 @@ function App() {
 
   return (
     <div className="app">
+      {travelSaveError && (
+      <div
+        role="alert"
+        style={{
+          padding: "16px",
+          margin: "16px",
+          border: "1px solid #dc2626",
+          borderRadius: "8px",
+        }}
+      >
+        <p>
+          <strong>Travel data could not be saved.</strong>
+        </p>
+
+        <p>{travelSaveError}</p>
+
+        <p>
+          Reloading will restore the last confirmed data from
+          Supabase. Any unsaved changes may be lost.
+        </p>
+
+        <button
+          type="button"
+          disabled={travelRecoveryLoading}
+          onClick={() => {
+            const confirmed = window.confirm(
+              "Reload confirmed travel data from Supabase? Unsaved changes may be lost."
+            );
+
+            if (!confirmed) return;
+
+            void recoverTravelData().catch((error) => {
+              window.alert(
+                error instanceof Error
+                  ? error.message
+                  : "Travel data recovery failed."
+              );
+            });
+          }}
+        >
+          {travelRecoveryLoading
+            ? "Recovering..."
+            : "Reload saved travel data"}
+        </button>
+      </div>
+    )}
       <header className="navbar">
         <a className="brand" href="#" aria-label={brand.name}>
           <span className="brand-icon">◎</span>
@@ -663,39 +1001,80 @@ function App() {
         />
       ) : activePage === "Add Destination" ? (
         
+      
       <AddDestination
         onBack={() => setActivePage("My Journey")}
-        onSave={(
+        onSave={async (
           countryCode,
           status,
           firstVisitDate,
           city,
           attraction
         ) => {
-          setCountryStatuses((previous) => ({
-            ...previous,
+          const userId = session?.user.id;
+
+          if (
+            !userId ||
+            authLoading ||
+            travelDataLoading ||
+            loadedTravelUserId !== userId ||
+            travelDataError
+          ) {
+            throw new Error("Your travel data is not ready. Please try again.");
+          }
+
+          // Prevent new changes while a failed save awaits recovery.
+          if (travelSaveFailedRef.current) {
+            throw new Error(
+              "A previous save failed. Please reload saved travel data before adding another destination."
+            );
+          }
+
+          if (travelRecoveryInProgressRef.current) {
+            throw new Error(
+              "Travel data recovery is in progress. Please wait."
+            );
+          }
+          // Prevent changes while another save is running.
+          if (saveInProgressRef.current) {
+            throw new Error(
+              "Another travel-data save is in progress. Please wait."
+            );
+          }
+          // Read the latest pending travel data.
+          const latestStatuses =
+            pendingTravelDataRef.current?.countryStatuses ?? countryStatuses;
+
+          const updatedStatuses: CountryStatuses = {
+            ...latestStatuses,
             [countryCode]: status,
-          }));
+          };
+
+          const latestDetails =
+            pendingTravelDataRef.current?.countryDetails ?? countryDetails;
+
+          let updatedDetails: CountryDetailsMap = {
+            ...latestDetails,
+          };
 
           if (status === "visited") {
-            setCountryDetails((previous) => {
-              const existingDetails = previous[countryCode] ?? {};
-              const existingCities = existingDetails.cities ?? [];
-              const existingAttractions = existingDetails.attractions ?? [];
+            const existingDetails = latestDetails[countryCode] ?? {};
+            const existingCities = existingDetails.cities ?? [];
+            const existingAttractions = existingDetails.attractions ?? [];
 
-              const newCity = city.trim();
+            const newCity = city.trim();
 
-              const cityAlreadyExists = existingCities.some(
-                (existingCity) =>
-                  existingCity.toLowerCase() === newCity.toLowerCase()
-              );
+            const cityAlreadyExists = existingCities.some(
+              (existingCity) =>
+                existingCity.toLowerCase() === newCity.toLowerCase()
+            );
 
-              const updatedCities =
-                newCity && !cityAlreadyExists
-                  ? [...existingCities, newCity]
-                  : existingCities;
+            const updatedCities =
+              newCity && !cityAlreadyExists
+                ? [...existingCities, newCity]
+                : existingCities;
 
-              const attractionAlreadyExists = attraction
+            const attractionAlreadyExists = attraction
               ? existingAttractions.some(
                   (existing) =>
                     existing.name.trim().toLowerCase() ===
@@ -703,8 +1082,9 @@ function App() {
                     existing.city.trim().toLowerCase() ===
                       newCity.toLowerCase()
                 )
-              : false;    
-              const newAttraction =
+              : false;
+
+            const newAttraction =
               attraction && !attractionAlreadyExists
                 ? {
                     id: crypto.randomUUID(),
@@ -717,24 +1097,48 @@ function App() {
                   }
                 : null;
 
-              return {
-                ...previous,
-                [countryCode]: {
-                  ...existingDetails,
-                  firstVisitDate:
-                    firstVisitDate || existingDetails.firstVisitDate,
-                  cities: updatedCities,
-                  attractions: newAttraction
-                    ? [...existingAttractions, newAttraction]
-                    : existingAttractions,
-                },
-              };
-            });
+            updatedDetails = {
+            ...latestDetails,
+            [countryCode]: {
+                ...existingDetails,
+                firstVisitDate:
+                  firstVisitDate || existingDetails.firstVisitDate,
+                cities: updatedCities,
+                attractions: newAttraction
+                  ? [...existingAttractions, newAttraction]
+                  : existingAttractions,
+              },
+            };
+          }
+
+          // Reserve the latest travel data before saving.
+          pendingTravelDataRef.current = {
+            countryStatuses: updatedStatuses,
+            countryDetails: updatedDetails,
+          };
+
+          // Save to Supabase before updating the dashboard.
+          await saveTravelChanges(updatedStatuses, updatedDetails);
+
+          // Do not apply an old account's data after an account switch.
+          if (currentUserIdRef.current !== userId) {
+            throw new Error(
+              "Account changed during saving. Reload your travel data."
+            );
+          }
+          // Apply this save result only if it is still the latest pending snapshot.
+          if (
+            pendingTravelDataRef.current?.countryStatuses === updatedStatuses &&
+            pendingTravelDataRef.current?.countryDetails === updatedDetails
+          ) {
+            setCountryStatuses(updatedStatuses);
+            setCountryDetails(updatedDetails);
           }
 
           setActivePage("My Journey");
         }}
       />
+
 
       ) : (
         <>
@@ -749,6 +1153,13 @@ function App() {
 
           <button
             className="primary-button"
+            disabled={
+              !session ||
+              authLoading ||
+              travelDataLoading ||
+              loadedTravelUserId !== session.user.id ||
+              Boolean(travelDataError)
+            }
             onClick={() => setActivePage("Add Destination")}
           >
             + Add a destination
@@ -790,13 +1201,86 @@ function App() {
             </div>
 
             <WorldMap
-              countryStatuses={countryStatuses}
-              onCountryStatusChange={(countryCode, status) => {
-                setCountryStatuses((previous) => ({
-                  ...previous,
+              countryStatuses={countryStatuses}              
+              onCountryStatusChange={async (countryCode, status) => {
+                const userId = session?.user.id;
+
+                if (
+                  !userId ||
+                  authLoading ||
+                  travelDataLoading ||
+                  loadedTravelUserId !== userId ||
+                  travelDataError
+                ) {
+                  window.alert(
+                    "Your travel data is not ready. Please try again."
+                  );
+                  return;
+                }
+                // Block new changes if a previous save failed.
+                if (travelSaveFailedRef.current) {
+                  window.alert(
+                    "A previous save failed. Please reload saved travel data before making more changes."
+                  );
+                  return;
+                }
+
+                // Block changes while cloud recovery is running.
+                if (travelRecoveryInProgressRef.current) {
+                  window.alert(
+                    "Travel data recovery is in progress. Please wait."
+                  );
+                  return;
+                }
+                // Prevent country-status changes during an active save.
+                if (saveInProgressRef.current) {
+                  window.alert(
+                    "Another travel-data save is in progress. Please wait."
+                  );
+                  return;
+                }
+
+                const latestStatuses =
+                  pendingTravelDataRef.current?.countryStatuses ?? countryStatuses;
+
+                const updatedStatuses: CountryStatuses = {
+                  ...latestStatuses,
                   [countryCode]: status,
-                }));
+                };
+
+                try {
+                  const latestDetails =
+                    pendingTravelDataRef.current?.countryDetails ?? countryDetails;
+
+                  // Reserve the latest status and details before saving.
+                  pendingTravelDataRef.current = {
+                    countryStatuses: updatedStatuses,
+                    countryDetails: latestDetails,
+                  };
+
+                  await saveTravelChanges(updatedStatuses, latestDetails);
+
+                  if (currentUserIdRef.current !== userId) {
+                    return;
+                  }
+
+                  // Apply this result only if it is still the latest pending status snapshot.
+                  if (
+                    pendingTravelDataRef.current?.countryStatuses === updatedStatuses
+                  ) {
+                    setCountryStatuses(updatedStatuses);
+                  }
+                } catch (error) {
+                  console.error("Failed to save country status:", error);
+
+                  window.alert(
+                    error instanceof Error
+                      ? error.message
+                      : "Unable to save country status. Please try again."
+                  );
+                }
               }}
+
               countryDetails={countryDetails}
               onCountryDetailsChange={(countryCode, details) => {
                 setCountryDetails((previous) => ({
@@ -806,6 +1290,9 @@ function App() {
                     ...details,
                   },
                 }));
+              }}
+              onSaveCountryDetails={async (countryCode, details) => {
+                await updateCountryDetails(countryCode, details);
               }}
             />
           </article>

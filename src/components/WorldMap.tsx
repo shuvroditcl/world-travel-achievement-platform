@@ -7,7 +7,7 @@ import {
   Geography,
   ZoomableGroup,
 } from "react-simple-maps";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./WorldMap.css";
 
 type CountryStatus = "visited" | "planned" | "not-visited";
@@ -31,12 +31,23 @@ interface CountryDetails {
 
 interface WorldMapProps {
   countryStatuses: Record<string, CountryStatus>;
-  onCountryStatusChange: (countryCode: string, status: CountryStatus) => void;
+
+  onCountryStatusChange: (
+    countryCode: string,
+    status: CountryStatus
+  ) => Promise<void>;
+
   countryDetails: Record<string, CountryDetails>;
+
   onCountryDetailsChange: (
     countryCode: string,
     details: CountryDetails
   ) => void;
+
+  onSaveCountryDetails?: (
+    countryCode: string,
+    details: CountryDetails
+  ) => Promise<void>;
 }
 
 const geoUrl =
@@ -47,8 +58,62 @@ const geoUrl =
     onCountryStatusChange,
     countryDetails,
     onCountryDetailsChange,
+    onSaveCountryDetails,
   }: WorldMapProps) {
+  const handleSaveCountryDetails = async () => {
+    if (
+      !selectedCountryCode ||
+      !onSaveCountryDetails ||
+      isSavingDetails ||
+      isSavingStatus
+    ) {
+      return;
+    }
+
+    const countryCode = selectedCountryCode;
+    const details = countryDetails[countryCode] ?? {};
+
+    setIsSavingDetails(true);
+
+    try {
+      await onSaveCountryDetails(countryCode, details);
+
+      setHasUnsavedDetails(false);
+      setUnsavedCountryCode(null);
+    } catch (error) {
+      console.error("Failed to save country details:", error);
+
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Unable to save country details."
+      );
+    } finally {
+      setIsSavingDetails(false);
+    }
+  };
+
   const [selectedCountry, setSelectedCountry] = useState("");
+  const [isSavingStatus, setIsSavingStatus] = useState(false);
+  const [isSavingDetails, setIsSavingDetails] = useState(false);
+  const [hasUnsavedDetails, setHasUnsavedDetails] = useState(false);
+  useEffect(() => {
+    if (!hasUnsavedDetails) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [hasUnsavedDetails]);
+  const [unsavedCountryCode, setUnsavedCountryCode] = useState<string | null>(null);
   const [newCity, setNewCity] = useState("");
   const [newAttraction, setNewAttraction] = useState({
     name: "",
@@ -61,6 +126,24 @@ const geoUrl =
 
   const [selectedCountryCode, setSelectedCountryCode] =
     useState<string | null>(null);
+  
+  const handleCountryStatusChange = async (
+    countryCode: string,
+    status: CountryStatus
+  ) => {
+    if (isSavingStatus) {
+      return;
+    }
+
+    setIsSavingStatus(true);
+
+    try {
+      await onCountryStatusChange(countryCode, status);
+    } finally {
+      setIsSavingStatus(false);
+    }
+  };
+  
   const [hoveredCountry, setHoveredCountry] = useState<{
   name: string;
   x: number;
@@ -70,6 +153,15 @@ const geoUrl =
   silhouettePath: string;
 } | null>(null);
 
+  const handleCountryDetailsChange = (
+    countryCode: string,
+    details: CountryDetails
+  ) => {
+    onCountryDetailsChange(countryCode, details);
+
+    setHasUnsavedDetails(true);
+    setUnsavedCountryCode(countryCode);
+  };
   return (
     <div className="world-map-container">
       <div className="world-map-heading">
@@ -122,6 +214,25 @@ const geoUrl =
                     key={geo.rsmKey}
                     geography={geo}
                     onClick={() => {
+                      if (isSavingDetails || isSavingStatus) {
+                        window.alert(
+                          "Please wait until the current save operation finishes."
+                        );
+                        return;
+                      }
+
+                      if (
+                        hasUnsavedDetails &&
+                        unsavedCountryCode !== null &&
+                        unsavedCountryCode !== countryCode
+                      ) {
+                        window.alert(
+                          "You have unsaved changes in another country. " +
+                          "Please return to that country and click Save Changes before switching."
+                        );
+                        return;
+                      }
+
                       setSelectedCountry(countryName);
                       setSelectedCountryCode(countryCode);
                     }}
@@ -219,7 +330,24 @@ const geoUrl =
 
             <button
               className="status-close-button"
-              onClick={() => setSelectedCountryCode(null)}
+              onClick={() => {
+              if (isSavingDetails || isSavingStatus) {
+                window.alert(
+                  "Please wait until the current save operation finishes."
+                );
+                return;
+              }
+
+              if (hasUnsavedDetails) {
+                window.alert(
+                  "You have unsaved country details. " +
+                  "Please click Save Changes before closing this panel."
+                );
+                return;
+              }
+
+              setSelectedCountryCode(null);
+            }}
               aria-label="Close country panel"
             >
               ×
@@ -238,11 +366,12 @@ const geoUrl =
               <input
                 id="first-visit-date"
                 type="date"
+                disabled={isSavingDetails}
                 value={
                   countryDetails[selectedCountryCode]?.firstVisitDate ?? ""
                 }
                 onChange={(event) =>
-                  onCountryDetailsChange(selectedCountryCode, {
+                  handleCountryDetailsChange(selectedCountryCode, {
                     firstVisitDate: event.target.value,
                   })
                 }
@@ -258,10 +387,11 @@ const geoUrl =
               <textarea
                 id="country-notes"
                 rows={4}
+                disabled={isSavingDetails}
                 placeholder="Write about your experiences, favourite places and memories..."
                 value={countryDetails[selectedCountryCode]?.notes ?? ""}
                 onChange={(event) =>
-                  onCountryDetailsChange(selectedCountryCode, {
+                  handleCountryDetailsChange(selectedCountryCode, {
                     notes: event.target.value,
                   })
                 }
@@ -278,6 +408,7 @@ const geoUrl =
                 <input
                   id="city-input"
                   type="text"
+                  disabled={isSavingDetails}
                   placeholder="Enter a city name..."
                   value={newCity}
                   onChange={(event) => setNewCity(event.target.value)}
@@ -296,7 +427,7 @@ const geoUrl =
                             existing.toLowerCase() === city.toLowerCase()
                         )
                       ) {
-                        onCountryDetailsChange(selectedCountryCode, {
+                        handleCountryDetailsChange(selectedCountryCode, {
                           cities: [...existingCities, city],
                         });
                         setNewCity("");
@@ -307,6 +438,7 @@ const geoUrl =
 
                 <button
                   type="button"
+                  disabled={isSavingDetails}
                   onClick={() => {
                     const city = newCity.trim();
                     const existingCities =
@@ -319,7 +451,7 @@ const geoUrl =
                           existing.toLowerCase() === city.toLowerCase()
                       )
                     ) {
-                      onCountryDetailsChange(selectedCountryCode, {
+                      handleCountryDetailsChange(selectedCountryCode, {
                         cities: [...existingCities, city],
                       });
                       setNewCity("");
@@ -338,12 +470,13 @@ const geoUrl =
 
                       <button
                         type="button"
+                        disabled={isSavingDetails}
                         onClick={() => {
                           const updatedCities =
                             (countryDetails[selectedCountryCode]?.cities ?? [])
                               .filter((_, cityIndex) => cityIndex !== index);
 
-                          onCountryDetailsChange(selectedCountryCode, {
+                          handleCountryDetailsChange(selectedCountryCode, {
                             cities: updatedCities,
                           });
                         }}
@@ -365,6 +498,7 @@ const geoUrl =
                 <input
                   id="attraction-name"
                   type="text"
+                  disabled={isSavingDetails}
                   placeholder="e.g. Taj Mahal"
                   value={newAttraction.name}
                   onChange={(event) =>
@@ -378,6 +512,7 @@ const geoUrl =
                 <label htmlFor="attraction-category">Category</label>
                 <select
                   id="attraction-category"
+                  disabled={isSavingDetails}
                   value={newAttraction.category}
                   onChange={(event) =>
                     setNewAttraction({
@@ -399,6 +534,7 @@ const geoUrl =
                 <input
                   id="attraction-city"
                   type="text"
+                  disabled={isSavingDetails}
                   placeholder="e.g. Agra"
                   value={newAttraction.city}
                   onChange={(event) =>
@@ -413,6 +549,7 @@ const geoUrl =
                 <input
                   id="attraction-date"
                   type="date"
+                  disabled={isSavingDetails}
                   value={newAttraction.visitDate}
                   onChange={(event) =>
                     setNewAttraction({
@@ -425,6 +562,7 @@ const geoUrl =
                 <label htmlFor="attraction-rating">Your rating</label>
                 <select
                   id="attraction-rating"
+                  disabled={isSavingDetails}
                   value={newAttraction.rating}
                   onChange={(event) =>
                     setNewAttraction({
@@ -444,6 +582,7 @@ const geoUrl =
                 <textarea
                   id="attraction-notes"
                   rows={3}
+                  disabled={isSavingDetails}
                   placeholder="What did you enjoy about this place?"
                   value={newAttraction.notes}
                   onChange={(event) =>
@@ -456,7 +595,7 @@ const geoUrl =
                 <button
                   type="button"
                   className="add-attraction-button"
-                  disabled={!newAttraction.name.trim()}
+                  disabled={isSavingDetails || !newAttraction.name.trim()}
                   onClick={() => {
                     if (!selectedCountryCode || !newAttraction.name.trim()) {
                       return;
@@ -470,7 +609,7 @@ const geoUrl =
                     const existingAttractions =
                       countryDetails[selectedCountryCode]?.attractions ?? [];
 
-                    onCountryDetailsChange(selectedCountryCode, {
+                    handleCountryDetailsChange(selectedCountryCode, {
                       attractions: [...existingAttractions, attraction],
                     });
 
@@ -510,8 +649,9 @@ const geoUrl =
                             <button
                               type="button"
                               className="remove-attraction-button"
+                              disabled={isSavingDetails}
                               onClick={() => {
-                                onCountryDetailsChange(selectedCountryCode, {
+                                handleCountryDetailsChange(selectedCountryCode, {
                                   attractions: (
                                     countryDetails[selectedCountryCode]?.attractions ?? []
                                   ).filter((item) => item.id !== attraction.id),
@@ -539,6 +679,29 @@ const geoUrl =
             </div>
             
           )}
+          {(countryStatuses[selectedCountryCode] ?? "not-visited") === "visited" && (
+            <div className="country-detail-save">
+              <button
+                type="button"
+                className="add-attraction-button"
+                disabled={
+                  isSavingDetails ||
+                  isSavingStatus ||
+                  !onSaveCountryDetails ||
+                  !hasUnsavedDetails ||
+                  unsavedCountryCode !== selectedCountryCode
+                }
+                onClick={() => void handleSaveCountryDetails()}
+              >
+                {isSavingDetails
+                  ? "Saving..."
+                  : hasUnsavedDetails &&
+                    unsavedCountryCode === selectedCountryCode
+                  ? "Save Changes"
+                  : "✓ Saved"}
+              </button>
+            </div>
+          )}
           <div className="status-options">
             <button
               className={
@@ -546,8 +709,9 @@ const geoUrl =
                   ? "status-option selected visited-option"
                   : "status-option"
               }
+              disabled={isSavingStatus || isSavingDetails || hasUnsavedDetails}
               onClick={() =>
-                onCountryStatusChange(selectedCountryCode, "visited")
+                void handleCountryStatusChange(selectedCountryCode, "visited")
               }
             >
               <span>✓</span>
@@ -560,8 +724,9 @@ const geoUrl =
                   ? "status-option selected planned-option"
                   : "status-option"
               }
+              disabled={isSavingStatus || isSavingDetails || hasUnsavedDetails}
               onClick={() =>
-                onCountryStatusChange(selectedCountryCode, "planned")
+                void handleCountryStatusChange(selectedCountryCode, "planned")
               }
             >
               <span>◷</span>
@@ -574,14 +739,20 @@ const geoUrl =
                   ? "status-option selected unvisited-option"
                   : "status-option"
               }
+              disabled={isSavingStatus || isSavingDetails || hasUnsavedDetails}
               onClick={() =>
-                onCountryStatusChange(selectedCountryCode, "not-visited")
+                void handleCountryStatusChange(selectedCountryCode, "not-visited")
               }
             >
               <span>○</span>
               Not visited
             </button>
           </div>
+          {isSavingStatus && (
+            <p role="status" aria-live="polite">
+              Saving...
+            </p>
+          )}
         </div>
       )}
     </div>
